@@ -18,6 +18,13 @@ test.describe("Leadership Rankings", () => {
     await expect(page.getByTestId("vendor-detail-score")).toBeVisible();
     await expect(page.getByTestId("project-score-chart")).toBeVisible();
     await expect(page.getByTestId("project-factor-stacked-chart")).toBeVisible();
+    await expect(page.getByTestId("attribute-charts-section")).toBeVisible();
+    await expect(page.getByTestId("attr-coverage-chart")).toBeVisible();
+    await expect(page.getByTestId("attr-xray-chart")).toBeVisible();
+    await expect(page.getByTestId("attr-responsiveness-chart")).toBeVisible();
+    await expect(page.getByTestId("attr-availability-chart")).toBeVisible();
+    await expect(page.getByTestId("attr-complexity-chart")).toBeVisible();
+    await expect(page.getByTestId("attr-defects-chart")).toBeVisible();
     await expect(page.getByTestId("project-breakdown-table")).toBeVisible();
   });
 });
