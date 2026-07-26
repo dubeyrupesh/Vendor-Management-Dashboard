@@ -12,7 +12,7 @@ export class VendorListPage {
     this.vendorList = page.getByTestId("vendor-list");
     this.vendorNameInput = page.getByTestId("vendor-name-input");
     this.vendorSubmit = page.getByTestId("vendor-submit");
-    this.ratingsNav = page.getByRole("link", { name: "Ratings" });
+    this.ratingsNav = page.getByRole("link", { name: "Ratings", exact: true });
   }
 
   async goto() {
