@@ -1,0 +1,13 @@
+---
+description: Testing naming conventions and Playwright POM rules
+alwaysApply: true
+---
+
+# Testing conventions
+
+- Unit tests: Vitest, files named `*.test.ts` (next to source or under `tests/unit/`).
+- UI/E2E: Playwright with Page Object Model under `tests/e2e/pages/` and `tests/e2e/specs/`.
+- Page objects: `PascalCase` + `Page.ts`; classes match file names; **no assertions in page objects**.
+- Specs: `kebab-case` + `.spec.ts`; `test.describe` Title Case; `test` titles are behavior sentences.
+- Prefer `getByRole` / `getByLabel`; `data-testid` values use kebab-case (e.g. `vendor-rank-table`).
+- CI runs `test:unit` then `test:e2e` via GitHub Actions — keep both scripts working.

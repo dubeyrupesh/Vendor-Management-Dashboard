@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:unit
+
+  e2e:
+    name: Playwright e2e
+    runs-on: ubuntu-latest
+    needs: unit
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: vendor
+          POSTGRES_PASSWORD: vendor
+          POSTGRES_DB: vendor_quality
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vendor -d vendor_quality"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://vendor:vendor@localhost:5432/vendor_quality?schema=public
+      AUTH_SECRET: ci-auth-secret-not-for-production
+      NEXTAUTH_URL: http://127.0.0.1:3000
+      AUTH_URL: http://127.0.0.1:3000
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma migrate deploy
+      - run: npm run db:seed
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

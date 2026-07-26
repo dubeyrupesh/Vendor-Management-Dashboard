@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  QUALITY_MANAGER
+  LEADERSHIP
+}
+
+enum TestType {
+  WEB
+  MOBILE
+  API
+  PERFORMANCE
+  OTHER
+}
+
+enum MetricSource {
+  MANUAL
+  STUB
+  GITLAB
+  XRAY
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  ratings      QualitativeRating[]
+}
+
+model Vendor {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  projects  Project[]
+  scores    VendorQuarterScore[]
+}
+
+model Project {
+  id                String   @id @default(cuid())
+  vendorId          String
+  name              String
+  externalId        String   @unique
+  requiredTestTypes TestType[]
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  vendor            Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  metrics           ProjectQuarterMetric[]
+  ratings           QualitativeRating[]
+
+  @@unique([vendorId, name])
+  @@index([vendorId])
+}
+
+model ProjectQuarterMetric {
+  id                  String       @id @default(cuid())
+  projectId           String
+  quarter             String
+  automationCoverage  Float
+  manualTests         Int          @default(0)
+  automatedTests      Int          @default(0)
+  prodDefectsLeaked   Int          @default(0)
+  source              MetricSource @default(MANUAL)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  project             Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, quarter])
+  @@index([quarter])
+}
+
+model QualitativeRating {
+  id                     String   @id @default(cuid())
+  projectId              String
+  quarter                String
+  responsiveness         Int
+  availability           Int
+  complexityUnderstanding Int
+  ratedById              String?
+  notes                  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  project                Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ratedBy                User?    @relation(fields: [ratedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, quarter])
+  @@index([quarter])
+}
+
+model VendorQuarterScore {
+  id             String   @id @default(cuid())
+  vendorId       String
+  quarter        String
+  overallScore   Float
+  scoreBreakdown Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  vendor         Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorId, quarter])
+  @@index([quarter])
+}
