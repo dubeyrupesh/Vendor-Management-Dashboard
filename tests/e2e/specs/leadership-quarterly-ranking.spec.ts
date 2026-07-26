@@ -6,13 +6,22 @@ test.describe("Leadership Rankings", () => {
     await loginAsLeadership();
 
     const ranking = new LeadershipRankingPage(page);
-    await ranking.goto("2026-Q2");
+    await ranking.goto("quarterly", "2026-Q2");
 
     await expect(ranking.rankTable).toBeVisible();
     await expect(ranking.rankRows.first()).toBeVisible();
     await expect(ranking.chart).toBeVisible();
     await expect(page.getByTestId("coverage-grouped-chart")).toBeVisible();
     await expect(page.getByTestId("vendor-factor-radar")).toBeVisible();
+    await expect(page.getByTestId("period-summary")).toContainText("2026-Q2");
+
+    await ranking.applyPeriod("half-yearly", "2026-H1");
+    await expect(page.getByTestId("period-summary")).toContainText("2026-H1");
+    await expect(ranking.rankRows.first()).toBeVisible();
+
+    await ranking.applyPeriod("yearly", "2025");
+    await expect(page.getByTestId("period-summary")).toContainText("2025");
+    await expect(ranking.rankRows.first()).toBeVisible();
 
     await ranking.openFirstVendorDetail();
     await expect(page.getByTestId("vendor-detail-score")).toBeVisible();

@@ -8,7 +8,8 @@ const prisma = new PrismaClient();
 const gitlab = new StubGitLabSource();
 const xray = new StubJiraXraySource();
 
-const QUARTER = "2026-Q2";
+/** Multi-quarter history for quarterly / half-yearly / yearly views. */
+const QUARTERS = ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2"] as const;
 
 type ProjectSeed = {
   name: string;
@@ -129,6 +130,23 @@ const vendors: { name: string; projects: ProjectSeed[] }[] = [
   },
 ];
 
+function clampRating(value: number) {
+  return Math.min(5, Math.max(1, value));
+}
+
+function qualitativeForQuarter(
+  base: ProjectSeed["qualitative"],
+  quarter: string,
+): ProjectSeed["qualitative"] {
+  const q = Number(quarter.slice(-1));
+  const drift = q - 3; // Q1:-2 ... Q4:+1 around recent history
+  return {
+    responsiveness: clampRating(base.responsiveness + (drift > 0 ? 0 : -1)),
+    availability: clampRating(base.availability + (q % 2 === 0 ? 1 : 0) - 1),
+    complexityUnderstanding: clampRating(base.complexityUnderstanding + (q >= 3 ? 1 : 0) - 1),
+  };
+}
+
 async function main() {
   await prisma.vendorQuarterScore.deleteMany();
   await prisma.qualitativeRating.deleteMany();
@@ -160,9 +178,8 @@ async function main() {
 
   for (const vendorData of vendors) {
     const vendor = await prisma.vendor.create({ data: { name: vendorData.name } });
-    const projectScores: number[] = [];
-    const projectBreakdowns = [];
 
+    const createdProjects = [];
     for (const projectData of vendorData.projects) {
       const project = await prisma.project.create({
         data: {
@@ -172,65 +189,73 @@ async function main() {
           requiredTestTypes: projectData.types,
         },
       });
+      createdProjects.push({ project, seed: projectData });
+    }
 
-      const coverage = (await gitlab.getAutomationCoverage(project.externalId, QUARTER)) ?? 0;
-      const defects = await gitlab.getProdDefectCount(project.externalId, QUARTER);
-      const counts = await xray.getXrayTestCounts(project.externalId, QUARTER);
-      const qualitative = projectData.qualitative;
+    for (const quarter of QUARTERS) {
+      const projectScores: number[] = [];
+      const projectBreakdowns = [];
 
-      // Every project gets metrics + qualitative ratings for the quarter.
-      await prisma.projectQuarterMetric.create({
-        data: {
-          projectId: project.id,
-          quarter: QUARTER,
+      for (const { project, seed } of createdProjects) {
+        const coverage = (await gitlab.getAutomationCoverage(project.externalId, quarter)) ?? 0;
+        const defects = await gitlab.getProdDefectCount(project.externalId, quarter);
+        const counts = await xray.getXrayTestCounts(project.externalId, quarter);
+        const qualitative = qualitativeForQuarter(seed.qualitative, quarter);
+
+        await prisma.projectQuarterMetric.create({
+          data: {
+            projectId: project.id,
+            quarter,
+            automationCoverage: coverage,
+            manualTests: counts.manual,
+            automatedTests: counts.automated,
+            prodDefectsLeaked: defects,
+            source: MetricSource.STUB,
+          },
+        });
+
+        await prisma.qualitativeRating.create({
+          data: {
+            projectId: project.id,
+            quarter,
+            ...qualitative,
+            ratedById: qm.id,
+          },
+        });
+
+        const breakdown = calculateProjectScore({
           automationCoverage: coverage,
           manualTests: counts.manual,
           automatedTests: counts.automated,
-          prodDefectsLeaked: defects,
-          source: MetricSource.STUB,
-        },
-      });
-
-      await prisma.qualitativeRating.create({
-        data: {
-          projectId: project.id,
-          quarter: QUARTER,
           ...qualitative,
-          ratedById: qm.id,
+          prodDefectsLeaked: defects,
+        });
+
+        projectScores.push(breakdown.overallScore);
+        projectBreakdowns.push({
+          projectId: project.id,
+          projectName: project.name,
+          ...breakdown,
+        });
+      }
+
+      await prisma.vendorQuarterScore.create({
+        data: {
+          vendorId: vendor.id,
+          quarter,
+          overallScore: averageVendorScore(projectScores),
+          scoreBreakdown: { projects: projectBreakdowns },
         },
-      });
-
-      const breakdown = calculateProjectScore({
-        automationCoverage: coverage,
-        manualTests: counts.manual,
-        automatedTests: counts.automated,
-        ...qualitative,
-        prodDefectsLeaked: defects,
-      });
-
-      projectScores.push(breakdown.overallScore);
-      projectBreakdowns.push({
-        projectId: project.id,
-        projectName: project.name,
-        ...breakdown,
       });
     }
-
-    // Vendor score = average of all project scores for the quarter.
-    await prisma.vendorQuarterScore.create({
-      data: {
-        vendorId: vendor.id,
-        quarter: QUARTER,
-        overallScore: averageVendorScore(projectScores),
-        scoreBreakdown: { projects: projectBreakdowns },
-      },
-    });
   }
 
   console.log("Seed complete.");
   console.log(`Vendors: ${vendors.length}; projects per vendor: 5; total projects: ${vendors.length * 5}`);
+  console.log(`Quarters seeded: ${QUARTERS.join(", ")}`);
+  console.log("Half-years available: 2025-H2, 2026-H1");
+  console.log("Years available: 2025, 2026");
   console.log("Users: qm@example.com / lead@example.com — password: password123");
-  console.log(`Quarter seeded: ${QUARTER}`);
 }
 
 main()

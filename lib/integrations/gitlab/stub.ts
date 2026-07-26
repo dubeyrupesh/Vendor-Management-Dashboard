@@ -3,15 +3,13 @@ import type { QualityDataSource } from "../types";
 /** Deterministic stub — replace with a real GitLab client later. */
 export class StubGitLabSource implements Pick<QualityDataSource, "getAutomationCoverage" | "getProdDefectCount"> {
   async getAutomationCoverage(projectExternalId: string, quarter: string): Promise<number | null> {
-    void quarter;
-    const hash = hashString(projectExternalId);
-    return 60 + (hash % 41);
+    const hash = hashString(`${projectExternalId}:${quarter}:coverage`);
+    return 55 + (hash % 46);
   }
 
   async getProdDefectCount(projectExternalId: string, quarter: string): Promise<number> {
-    void quarter;
-    const hash = hashString(projectExternalId);
-    return hash % 6;
+    const hash = hashString(`${projectExternalId}:${quarter}:defects`);
+    return hash % 7;
   }
 }
 

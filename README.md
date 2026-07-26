@@ -39,6 +39,16 @@ Playwright layout:
 - Specs: `tests/e2e/specs/*.spec.ts`
 - Fixtures: `tests/e2e/fixtures/`
 
+## Period views
+
+Leadership can switch:
+
+- **Quarterly** — e.g. `2026-Q2`
+- **Half-yearly** — e.g. `2026-H1` averages Q1+Q2
+- **Yearly** — e.g. `2025` averages Q1–Q4 present in the data
+
+Seed includes `2025-Q3`, `2025-Q4`, `2026-Q1`, `2026-Q2`.
+
 ## Scoring (v1)
 
 Per project, then averaged to the vendor for the quarter:

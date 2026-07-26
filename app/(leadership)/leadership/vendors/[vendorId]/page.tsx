@@ -1,104 +1,54 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/db";
 import { AppShell } from "@/components/AppShell";
+import { PeriodFilter } from "@/components/PeriodFilter";
 import { formatScore } from "@/lib/utils";
 import { AUTOMATION_COVERAGE_TARGET, weightedFactorContributions } from "@/lib/scoring/weights";
 import { ProjectScoreBarChart } from "@/components/charts/ProjectScoreBarChart";
 import { ProjectFactorStackedChart } from "@/components/charts/ProjectFactorStackedChart";
 import { ProjectAttributeBarChart } from "@/components/charts/ProjectAttributeBarChart";
-
-type BreakdownProject = {
-  projectId: string;
-  projectName: string;
-  overallScore: number;
-  automationCoverageScore: number;
-  xrayAutomationRatioScore: number;
-  qualitativeScore: number;
-  prodDefectLeakageScore: number;
-  meetsCoverageTarget: boolean;
-};
+import { buildPeriodOptions, parsePeriodSearchParams, periodQueryString } from "@/lib/periods";
+import { getVendorPeriodRows, listAvailableQuarters } from "@/lib/reporting/period-aggregates";
 
 export default async function VendorDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ vendorId: string }>;
-  searchParams: Promise<{ quarter?: string }>;
+  searchParams: Promise<{ periodType?: string; period?: string; quarter?: string }>;
 }) {
   const session = await auth();
   if (!session?.user) redirect("/login");
 
   const { vendorId } = await params;
-  const { quarter = "2026-Q2" } = await searchParams;
+  const queryParams = await searchParams;
+  const selection = parsePeriodSearchParams(queryParams);
+  const availableQuarters = await listAvailableQuarters();
+  const periodOptions = buildPeriodOptions(availableQuarters);
+  const { label, quarters, rows } = await getVendorPeriodRows(selection);
+  const query = periodQueryString(selection);
 
-  const vendor = await prisma.vendor.findUnique({
-    where: { id: vendorId },
-    include: {
-      scores: { where: { quarter } },
-      projects: {
-        where: { active: true },
-        include: {
-          metrics: { where: { quarter } },
-          ratings: { where: { quarter } },
-        },
-        orderBy: { name: "asc" },
-      },
-    },
-  });
+  const vendorRow = rows.find((row) => row.vendorId === vendorId);
+  if (!vendorRow) notFound();
 
-  if (!vendor) notFound();
-
-  const score = vendor.scores[0];
-  const breakdown = (score?.scoreBreakdown as { projects?: BreakdownProject[] } | null)?.projects ?? [];
-
-  const projectRows = vendor.projects.map((project) => {
-    const metric = project.metrics[0];
-    const rating = project.ratings[0];
-    const projectScore = breakdown.find((item) => item.projectId === project.id);
-    const coverage = metric?.automationCoverage ?? 0;
-    const xrayTotal = (metric?.manualTests ?? 0) + (metric?.automatedTests ?? 0);
-    const xrayRatio = xrayTotal ? ((metric?.automatedTests ?? 0) / xrayTotal) * 100 : 0;
-
-    return {
-      name: project.name,
-      coverage,
-      xrayRatio,
-      responsiveness: rating?.responsiveness ?? 0,
-      availability: rating?.availability ?? 0,
-      complexityUnderstanding: rating?.complexityUnderstanding ?? 0,
-      defects: metric?.prodDefectsLeaked ?? 0,
-      score: projectScore?.overallScore ?? 0,
-      meetsCoverageTarget: coverage > AUTOMATION_COVERAGE_TARGET,
-      hasMetric: Boolean(metric),
-      hasRating: Boolean(rating),
-      qualitativeAvg: rating
-        ? (rating.responsiveness + rating.availability + rating.complexityUnderstanding) / 3
-        : null,
-    };
-  });
-
-  const projectScoreChart = projectRows.map((row) => ({
+  const projectScoreChart = vendorRow.projects.map((row) => ({
     name: row.name,
     score: row.score,
     coverage: row.coverage,
   }));
 
-  const factorChart = breakdown.map((project) => {
-    const weighted = weightedFactorContributions(project);
-    return {
-      name: project.projectName,
-      ...weighted,
-    };
-  });
+  const factorChart = vendorRow.scoreBreakdownProjects.map((project) => ({
+    name: project.projectName,
+    ...weightedFactorContributions(project),
+  }));
 
   const attributeCharts = [
     {
       title: "Automation coverage",
       subtitle: `Per-project coverage vs >${AUTOMATION_COVERAGE_TARGET}% target.`,
       testId: "attr-coverage-chart",
-      data: projectRows.map((row) => ({ name: row.name, value: row.coverage })),
+      data: vendorRow.projects.map((row) => ({ name: row.name, value: row.coverage })),
       domain: [0, 100] as [number, number],
       unit: "%",
       color: "#0f6a6a",
@@ -110,7 +60,10 @@ export default async function VendorDetailPage({
       title: "Xray automation ratio",
       subtitle: "Automated tests as a share of documented Xray tests.",
       testId: "attr-xray-chart",
-      data: projectRows.map((row) => ({ name: row.name, value: Number(row.xrayRatio.toFixed(1)) })),
+      data: vendorRow.projects.map((row) => ({
+        name: row.name,
+        value: Number(row.xrayRatio.toFixed(1)),
+      })),
       domain: [0, 100] as [number, number],
       unit: "%",
       color: "#2f7d4a",
@@ -119,7 +72,7 @@ export default async function VendorDetailPage({
       title: "Responsiveness",
       subtitle: "QM rating (1–5) across this vendor’s projects.",
       testId: "attr-responsiveness-chart",
-      data: projectRows.map((row) => ({ name: row.name, value: row.responsiveness })),
+      data: vendorRow.projects.map((row) => ({ name: row.name, value: row.responsiveness })),
       domain: [0, 5] as [number, number],
       unit: "",
       color: "#0b4f52",
@@ -128,7 +81,7 @@ export default async function VendorDetailPage({
       title: "Availability",
       subtitle: "QM rating (1–5) across this vendor’s projects.",
       testId: "attr-availability-chart",
-      data: projectRows.map((row) => ({ name: row.name, value: row.availability })),
+      data: vendorRow.projects.map((row) => ({ name: row.name, value: row.availability })),
       domain: [0, 5] as [number, number],
       unit: "",
       color: "#b0893d",
@@ -137,7 +90,10 @@ export default async function VendorDetailPage({
       title: "Complexity understanding",
       subtitle: "QM rating (1–5) across this vendor’s projects.",
       testId: "attr-complexity-chart",
-      data: projectRows.map((row) => ({ name: row.name, value: row.complexityUnderstanding })),
+      data: vendorRow.projects.map((row) => ({
+        name: row.name,
+        value: row.complexityUnderstanding,
+      })),
       domain: [0, 5] as [number, number],
       unit: "",
       color: "#4a5d6a",
@@ -146,33 +102,38 @@ export default async function VendorDetailPage({
       title: "Prod defects leaked",
       subtitle: "Lower is better. Count of defects leaked to production.",
       testId: "attr-defects-chart",
-      data: projectRows.map((row) => ({ name: row.name, value: row.defects })),
-      domain: [0, Math.max(5, ...projectRows.map((row) => row.defects))] as [number, number],
+      data: vendorRow.projects.map((row) => ({ name: row.name, value: row.defects })),
+      domain: [0, Math.max(5, ...vendorRow.projects.map((row) => row.defects))] as [number, number],
       unit: "",
       color: "#b23a2f",
-      alertBelowOrEqual: undefined,
     },
   ];
 
   return (
     <AppShell
-      title={vendor.name}
-      subtitle={`Attribute graphs across all projects for ${quarter}. Vendor score averages project scores.`}
+      title={vendorRow.vendorName}
+      subtitle={`Attribute graphs across projects for ${label}. Half-yearly/yearly views average the included quarters.`}
       roleLabel={session.user.role === "QUALITY_MANAGER" ? "Quality Manager" : "Leadership"}
       userName={session.user.name ?? session.user.email ?? "Viewer"}
       nav={[
-        { href: `/leadership?quarter=${quarter}`, label: "Back to rankings" },
+        { href: `/leadership?${query}`, label: "Back to rankings" },
         ...(session.user.role === "QUALITY_MANAGER" ? [{ href: "/qm/ratings", label: "Ratings" }] : []),
       ]}
     >
+      <PeriodFilter selection={selection} options={periodOptions} testId="vendor-period-filter" />
+
+      <p className="mb-6 text-sm text-[var(--ink-muted)]" data-testid="period-summary">
+        Showing <span className="font-semibold text-[var(--ink)]">{label}</span>
+        {quarters.length > 1 ? ` · averaged across ${quarters.join(", ")}` : null}
+      </p>
+
       <section className="mb-6 rounded-2xl border border-[var(--line)] bg-white/75 p-6 shadow-[var(--shadow)]">
-        <p className="text-sm text-[var(--ink-muted)]">Vendor quarterly score (avg of projects)</p>
+        <p className="text-sm text-[var(--ink-muted)]">Vendor score for period (avg of projects)</p>
         <p className="text-4xl font-semibold" data-testid="vendor-detail-score">
-          {score ? formatScore(score.overallScore) : "—"}
+          {formatScore(vendorRow.overallScore)}
         </p>
         <p className="mt-2 text-sm text-[var(--ink-muted)]">
-          {vendor.projects.length} projects ·{" "}
-          {projectRows.filter((row) => row.hasMetric && row.hasRating).length} fully rated
+          {vendorRow.projectCount} projects · {vendorRow.ratedCount} fully rated
         </p>
       </section>
 
@@ -197,7 +158,7 @@ export default async function VendorDetailPage({
         <div className="mb-4">
           <h2 className="text-2xl">Attributes across projects</h2>
           <p className="mt-1 text-sm text-[var(--ink-muted)]">
-            Individual rating inputs for each of {vendor.name}&apos;s projects.
+            Individual rating inputs for each of {vendorRow.vendorName}&apos;s projects in {label}.
           </p>
         </div>
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
@@ -241,8 +202,8 @@ export default async function VendorDetailPage({
               </tr>
             </thead>
             <tbody>
-              {projectRows.map((row) => (
-                <tr key={row.name} className="border-b border-[var(--line)]/70">
+              {vendorRow.projects.map((row) => (
+                <tr key={row.projectId} className="border-b border-[var(--line)]/70">
                   <td className="py-3 pr-3 font-semibold">{row.name}</td>
                   <td className="py-3 pr-3">{row.hasMetric ? `${row.coverage}%` : "—"}</td>
                   <td
@@ -264,7 +225,7 @@ export default async function VendorDetailPage({
           </table>
         </div>
         <p className="mt-4 text-sm text-[var(--ink-muted)]">
-          <Link href={`/leadership?quarter=${quarter}`} className="font-semibold text-[var(--sea)]">
+          <Link href={`/leadership?${query}`} className="font-semibold text-[var(--sea)]">
             ← Return to ranking
           </Link>
         </p>

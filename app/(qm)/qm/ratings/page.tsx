@@ -14,7 +14,18 @@ export default async function RatingsPage({
   if (!session?.user) redirect("/login");
 
   const params = await searchParams;
-  const quarter = params.quarter ?? "2026-Q2";
+  const availableQuarters = (
+    await prisma.vendorQuarterScore.findMany({
+      select: { quarter: true },
+      distinct: ["quarter"],
+      orderBy: { quarter: "asc" },
+    })
+  ).map((row) => row.quarter);
+  const quarterOptions =
+    availableQuarters.length > 0 ? availableQuarters : ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2"];
+  const quarter = quarterOptions.includes(params.quarter ?? "")
+    ? (params.quarter as string)
+    : quarterOptions[quarterOptions.length - 1];
 
   const projects = await prisma.project.findMany({
     where: { active: true },
@@ -46,12 +57,18 @@ export default async function RatingsPage({
       <form className="mb-6 flex flex-wrap items-end gap-3" data-testid="quarter-filter">
         <label className="text-sm font-semibold">
           Quarter
-          <input
+          <select
             name="quarter"
             defaultValue={quarter}
-            className="mt-1 block rounded-md border border-[var(--line)] px-3 py-2"
+            className="mt-1 block min-w-36 rounded-md border border-[var(--line)] px-3 py-2"
             data-testid="quarter-input"
-          />
+          >
+            {quarterOptions.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="text-sm font-semibold">
           Project

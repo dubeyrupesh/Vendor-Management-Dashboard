@@ -3,10 +3,9 @@ import type { QualityDataSource, XrayTestCounts } from "../types";
 /** Deterministic stub — replace with a real Jira/Xray client later. */
 export class StubJiraXraySource implements Pick<QualityDataSource, "getXrayTestCounts"> {
   async getXrayTestCounts(projectExternalId: string, quarter: string): Promise<XrayTestCounts> {
-    void quarter;
-    const hash = hashString(projectExternalId);
-    const automated = 40 + (hash % 80);
-    const manual = 10 + (hash % 40);
+    const hash = hashString(`${projectExternalId}:${quarter}:xray`);
+    const automated = 35 + (hash % 90);
+    const manual = 8 + (hash % 45);
     return { manual, automated };
   }
 }

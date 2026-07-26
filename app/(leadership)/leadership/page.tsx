@@ -1,25 +1,16 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/db";
 import { AppShell } from "@/components/AppShell";
 import { StatPill } from "@/components/StatPill";
+import { PeriodFilter } from "@/components/PeriodFilter";
 import { formatScore } from "@/lib/utils";
 import { AUTOMATION_COVERAGE_TARGET } from "@/lib/scoring/weights";
 import { VendorScoreBarChart } from "@/components/charts/VendorScoreBarChart";
 import { VendorFactorRadarChart } from "@/components/charts/VendorFactorRadarChart";
 import { CoverageGroupedBarChart } from "@/components/charts/CoverageGroupedBarChart";
-
-type BreakdownProject = {
-  projectId: string;
-  projectName: string;
-  overallScore: number;
-  automationCoverageScore: number;
-  xrayAutomationRatioScore: number;
-  qualitativeScore: number;
-  prodDefectLeakageScore: number;
-  meetsCoverageTarget: boolean;
-};
+import { buildPeriodOptions, parsePeriodSearchParams, periodQueryString } from "@/lib/periods";
+import { getVendorPeriodRows, listAvailableQuarters } from "@/lib/reporting/period-aggregates";
 
 function shortVendorName(name: string) {
   return name.replace(/\s+(Partners|Collective|Labs|Testing)?$/i, "").trim() || name;
@@ -28,80 +19,47 @@ function shortVendorName(name: string) {
 export default async function LeadershipPage({
   searchParams,
 }: {
-  searchParams: Promise<{ quarter?: string }>;
+  searchParams: Promise<{ periodType?: string; period?: string; quarter?: string }>;
 }) {
   const session = await auth();
   if (!session?.user) redirect("/login");
 
   const params = await searchParams;
-  const quarter = params.quarter ?? "2026-Q2";
+  const selection = parsePeriodSearchParams(params);
+  const availableQuarters = await listAvailableQuarters();
+  const periodOptions = buildPeriodOptions(availableQuarters);
+  const { label, quarters, rows } = await getVendorPeriodRows(selection);
+  const query = periodQueryString(selection);
 
-  const scores = await prisma.vendorQuarterScore.findMany({
-    where: { quarter },
-    include: {
-      vendor: {
-        include: {
-          projects: {
-            where: { active: true },
-            include: {
-              metrics: { where: { quarter } },
-              ratings: { where: { quarter } },
-            },
-          },
-        },
-      },
-    },
-    orderBy: { overallScore: "desc" },
-  });
+  const totalProjects = rows.reduce((sum, row) => sum + row.projectCount, 0);
+  const belowTarget = rows.reduce(
+    (count, row) => count + row.projects.filter((project) => !project.meetsCoverageTarget).length,
+    0,
+  );
 
-  const totalProjects = scores.reduce((sum, score) => sum + score.vendor.projects.length, 0);
-  const belowTarget = scores.reduce((count, score) => {
-    const failing = score.vendor.projects.filter((project) => {
-      const coverage = project.metrics[0]?.automationCoverage ?? 0;
-      return coverage <= AUTOMATION_COVERAGE_TARGET;
-    }).length;
-    return count + failing;
-  }, 0);
-
-  const rankChartData = scores.map((score) => ({
-    name: shortVendorName(score.vendor.name),
-    score: score.overallScore,
+  const rankChartData = rows.map((row) => ({
+    name: shortVendorName(row.vendorName),
+    score: row.overallScore,
   }));
 
-  const coverageChartData = scores.map((score) => {
-    const projects = score.vendor.projects;
-    const coverages = projects.map((project) => project.metrics[0]?.automationCoverage ?? 0);
-    const avgCoverage = coverages.length
-      ? coverages.reduce((a, b) => a + b, 0) / coverages.length
-      : 0;
-    const meeting = coverages.filter((value) => value > AUTOMATION_COVERAGE_TARGET).length;
-    return {
-      name: shortVendorName(score.vendor.name),
-      avgCoverage: Number(avgCoverage.toFixed(1)),
-      pctMeetingTarget: projects.length ? Number(((meeting / projects.length) * 100).toFixed(1)) : 0,
-    };
-  });
+  const coverageChartData = rows.map((row) => ({
+    name: shortVendorName(row.vendorName),
+    avgCoverage: Number(row.avgCoverage.toFixed(1)),
+    pctMeetingTarget: row.pctMeetingTarget,
+  }));
 
-  const factorRadarData = scores.map((score) => {
-    const projects = (score.scoreBreakdown as { projects?: BreakdownProject[] } | null)?.projects ?? [];
-    const avg = (key: keyof BreakdownProject) =>
-      projects.length
-        ? projects.reduce((sum, project) => sum + Number(project[key] ?? 0), 0) / projects.length
-        : 0;
-
-    return {
-      vendor: shortVendorName(score.vendor.name),
-      coverage: Number(avg("automationCoverageScore").toFixed(1)),
-      xray: Number(avg("xrayAutomationRatioScore").toFixed(1)),
-      qualitative: Number(avg("qualitativeScore").toFixed(1)),
-      defects: Number(avg("prodDefectLeakageScore").toFixed(1)),
-    };
-  });
+  const factorRadarData = rows.map((row) => ({
+    vendor: shortVendorName(row.vendorName),
+    coverage: Number(row.factorAverages.coverage.toFixed(1)),
+    xray: Number(row.factorAverages.xray.toFixed(1)),
+    qualitative: Number(row.factorAverages.qualitative.toFixed(1)),
+    defects: Number(row.factorAverages.defects.toFixed(1)),
+  }));
 
   return (
     <AppShell
-      title="Leadership quarterly ranking"
-      subtitle="Project ratings roll up to each vendor. Charts show overall score, coverage vs 80% target, and factor balance."
+      title="Leadership ranking"
+      subtitle="Project ratings roll up to each vendor. Switch between quarterly, half-yearly, and yearly views."
       roleLabel={session.user.role === "QUALITY_MANAGER" ? "Quality Manager" : "Leadership"}
       userName={session.user.name ?? session.user.email ?? "Viewer"}
       nav={[
@@ -114,27 +72,19 @@ export default async function LeadershipPage({
         { href: "/leadership", label: "Rankings" },
       ]}
     >
-      <form className="mb-6 flex items-end gap-3" data-testid="leadership-quarter-filter">
-        <label className="text-sm font-semibold">
-          Quarter
-          <input
-            name="quarter"
-            defaultValue={quarter}
-            className="mt-1 block rounded-md border border-[var(--line)] px-3 py-2"
-            data-testid="leadership-quarter-input"
-          />
-        </label>
-        <button type="submit" className="rounded-md border border-[var(--line)] bg-white px-4 py-2 font-semibold">
-          Update
-        </button>
-      </form>
+      <PeriodFilter selection={selection} options={periodOptions} testId="leadership-period-filter" />
+
+      <p className="mb-6 text-sm text-[var(--ink-muted)]" data-testid="period-summary">
+        Showing <span className="font-semibold text-[var(--ink)]">{label}</span>
+        {quarters.length > 1 ? ` · averaged across ${quarters.join(", ")}` : null}
+      </p>
 
       <section className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatPill label="Vendors ranked" value={String(scores.length)} />
+        <StatPill label="Vendors ranked" value={String(rows.length)} />
         <StatPill label="Projects rated" value={String(totalProjects)} />
         <StatPill
           label="Top vendor score"
-          value={scores[0] ? formatScore(scores[0].overallScore) : "—"}
+          value={rows[0] ? formatScore(rows[0].overallScore) : "—"}
           tone="ok"
         />
         <StatPill
@@ -148,7 +98,7 @@ export default async function LeadershipPage({
         <div className="rounded-2xl border border-[var(--line)] bg-white/75 p-6 shadow-[var(--shadow)]">
           <h2 className="mb-1 text-2xl">Vendor overall scores</h2>
           <p className="mb-4 text-sm text-[var(--ink-muted)]">
-            Average of all project scores for {quarter}.
+            Average of project scores for {label}.
           </p>
           <VendorScoreBarChart data={rankChartData} />
         </div>
@@ -171,7 +121,7 @@ export default async function LeadershipPage({
       </section>
 
       <section className="rounded-2xl border border-[var(--line)] bg-white/75 p-6 shadow-[var(--shadow)]">
-        <h2 className="mb-4 text-2xl">Vendor ranking · {quarter}</h2>
+        <h2 className="mb-4 text-2xl">Vendor ranking · {label}</h2>
         <div className="overflow-x-auto">
           <table className="min-w-full text-left text-sm" data-testid="vendor-rank-table">
             <thead className="border-b border-[var(--line)] text-[var(--ink-muted)]">
@@ -185,37 +135,32 @@ export default async function LeadershipPage({
               </tr>
             </thead>
             <tbody>
-              {scores.map((score, index) => {
-                const ratedCount = score.vendor.projects.filter(
-                  (project) => project.metrics[0] && project.ratings[0],
-                ).length;
-                return (
-                  <tr key={score.id} className="border-b border-[var(--line)]/70" data-testid="vendor-rank-row">
-                    <td className="py-3 pr-4 font-semibold">{index + 1}</td>
-                    <td className="py-3 pr-4">{score.vendor.name}</td>
-                    <td className="py-3 pr-4" data-testid="vendor-overall-score">
-                      {formatScore(score.overallScore)}
-                    </td>
-                    <td className="py-3 pr-4">{score.vendor.projects.length}</td>
-                    <td className="py-3 pr-4">
-                      {ratedCount}/{score.vendor.projects.length}
-                    </td>
-                    <td className="py-3">
-                      <Link
-                        href={`/leadership/vendors/${score.vendorId}?quarter=${quarter}`}
-                        className="font-semibold text-[var(--sea)]"
-                        data-testid="vendor-detail-link"
-                      >
-                        View projects
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-              {scores.length === 0 ? (
+              {rows.map((row, index) => (
+                <tr key={row.vendorId} className="border-b border-[var(--line)]/70" data-testid="vendor-rank-row">
+                  <td className="py-3 pr-4 font-semibold">{index + 1}</td>
+                  <td className="py-3 pr-4">{row.vendorName}</td>
+                  <td className="py-3 pr-4" data-testid="vendor-overall-score">
+                    {formatScore(row.overallScore)}
+                  </td>
+                  <td className="py-3 pr-4">{row.projectCount}</td>
+                  <td className="py-3 pr-4">
+                    {row.ratedCount}/{row.projectCount}
+                  </td>
+                  <td className="py-3">
+                    <Link
+                      href={`/leadership/vendors/${row.vendorId}?${query}`}
+                      className="font-semibold text-[var(--sea)]"
+                      data-testid="vendor-detail-link"
+                    >
+                      View projects
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-6 text-[var(--ink-muted)]">
-                    No scores for this quarter yet.
+                    No scores for this period yet.
                   </td>
                 </tr>
               ) : null}
