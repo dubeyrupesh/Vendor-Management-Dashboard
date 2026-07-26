@@ -4,7 +4,9 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { AppShell } from "@/components/AppShell";
 import { formatScore } from "@/lib/utils";
-import { AUTOMATION_COVERAGE_TARGET } from "@/lib/scoring/weights";
+import { AUTOMATION_COVERAGE_TARGET, weightedFactorContributions } from "@/lib/scoring/weights";
+import { ProjectScoreBarChart } from "@/components/charts/ProjectScoreBarChart";
+import { ProjectFactorStackedChart } from "@/components/charts/ProjectFactorStackedChart";
 
 type BreakdownProject = {
   projectId: string;
@@ -50,10 +52,28 @@ export default async function VendorDetailPage({
   const score = vendor.scores[0];
   const breakdown = (score?.scoreBreakdown as { projects?: BreakdownProject[] } | null)?.projects ?? [];
 
+  const projectScoreChart = vendor.projects.map((project) => {
+    const metric = project.metrics[0];
+    const projectScore = breakdown.find((item) => item.projectId === project.id);
+    return {
+      name: project.name,
+      score: projectScore?.overallScore ?? 0,
+      coverage: metric?.automationCoverage ?? 0,
+    };
+  });
+
+  const factorChart = breakdown.map((project) => {
+    const weighted = weightedFactorContributions(project);
+    return {
+      name: project.projectName,
+      ...weighted,
+    };
+  });
+
   return (
     <AppShell
       title={vendor.name}
-      subtitle={`Project-level quality breakdown for ${quarter}.`}
+      subtitle={`Every project is rated for ${quarter}; vendor score is the average of project scores.`}
       roleLabel={session.user.role === "QUALITY_MANAGER" ? "Quality Manager" : "Leadership"}
       userName={session.user.name ?? session.user.email ?? "Viewer"}
       nav={[
@@ -62,14 +82,38 @@ export default async function VendorDetailPage({
       ]}
     >
       <section className="mb-6 rounded-2xl border border-[var(--line)] bg-white/75 p-6 shadow-[var(--shadow)]">
-        <p className="text-sm text-[var(--ink-muted)]">Overall quarterly score</p>
+        <p className="text-sm text-[var(--ink-muted)]">Vendor quarterly score (avg of projects)</p>
         <p className="text-4xl font-semibold" data-testid="vendor-detail-score">
           {score ? formatScore(score.overallScore) : "—"}
         </p>
+        <p className="mt-2 text-sm text-[var(--ink-muted)]">
+          {vendor.projects.length} projects ·{" "}
+          {
+            vendor.projects.filter((project) => project.metrics[0] && project.ratings[0]).length
+          }{" "}
+          fully rated
+        </p>
+      </section>
+
+      <section className="mb-8 grid gap-6 lg:grid-cols-2">
+        <div className="rounded-2xl border border-[var(--line)] bg-white/75 p-6 shadow-[var(--shadow)]">
+          <h2 className="mb-1 text-2xl">Project scores</h2>
+          <p className="mb-4 text-sm text-[var(--ink-muted)]">
+            Green bars meet &gt;{AUTOMATION_COVERAGE_TARGET}% coverage; red bars are below target.
+          </p>
+          <ProjectScoreBarChart data={projectScoreChart} />
+        </div>
+        <div className="rounded-2xl border border-[var(--line)] bg-white/75 p-6 shadow-[var(--shadow)]">
+          <h2 className="mb-1 text-2xl">Score composition</h2>
+          <p className="mb-4 text-sm text-[var(--ink-muted)]">
+            Weighted factor contributions that sum to each project score.
+          </p>
+          <ProjectFactorStackedChart data={factorChart} />
+        </div>
       </section>
 
       <section className="rounded-2xl border border-[var(--line)] bg-white/75 p-6 shadow-[var(--shadow)]">
-        <h2 className="mb-4 text-2xl">Projects</h2>
+        <h2 className="mb-4 text-2xl">Project rating details</h2>
         <div className="overflow-x-auto">
           <table className="min-w-full text-left text-sm" data-testid="project-breakdown-table">
             <thead className="border-b border-[var(--line)] text-[var(--ink-muted)]">
